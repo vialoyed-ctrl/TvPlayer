@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FileProvider 能对外授权的目录清单。
+
+  为什么要 FileProvider：Android 7（API 24）起禁止把 `file://` 路径塞进 Intent
+  发给别的应用，一旦这么做会直接抛 FileUriExposedException。而「把 APK 交给系统
+  安装器」天生就是要跨应用传一个文件路径，所以必须走 `content://` + 临时读权限。
+
+  为什么三个目录都开：下载下来的安装包落在 `getApplicationSupportDirectory()`，
+  而 path_provider 在不同平台/版本上映射到 `filesDir`、`cacheDir` 或外部私有目录
+  都有可能。三个都声明上，就不用把「装包」这件事绑死在某一个具体路径上。
+  这三个目录都是本应用私有目录，别的应用本来就读不到，授权也是逐次临时授予。
+
+  `path="."` 表示整个目录；真机上也确实只需要这一层，不必再细分。
+-->
+<paths>
+    <files-path name="app_files" path="." />
+    <cache-path name="app_cache" path="." />
+    <external-files-path name="app_ext_files" path="." />
+</paths>
