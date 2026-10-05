@@ -559,7 +559,7 @@ class _SettingsViewState extends State<SettingsView> {
   }
 
   Widget _buildUpdateCard(UpdateService update) {
-    final configured = _storage.webDavConfig.isConfigured;
+    final configured = update.configured;
     final busy = update.busy;
     final phaseColor = switch (update.phase) {
       UpdatePhase.ready => TvTheme.success,
@@ -585,10 +585,10 @@ class _SettingsViewState extends State<SettingsView> {
     } else if (!update.remoteKnown) {
       remoteText = '没问到（本次检查没有成功）';
     } else if (remote == null) {
-      remoteText = '云端没有 ${UpdateService.kApkFileName}';
+      remoteText = 'GitHub 暂无正式发布版本';
     } else {
       remoteText =
-          '${UpdateService.kApkFileName}（${formatBytes(remote.sizeBytes)}）';
+          '${remote.tag} · ${remote.name}（${formatBytes(remote.sizeBytes)}）';
     }
 
     return _card(
@@ -596,10 +596,8 @@ class _SettingsViewState extends State<SettingsView> {
       title: '应用更新',
       children: [
         Text(
-          '把新版本的 ${UpdateService.kApkFileName} 放进同一个 WebDAV 目录'
-          '（和 sync.json 放在一起），App 就会发现有更新并下载安装；'
-          '没放这个文件就不更新。\n'
-          '装之前会先核对包名和签名，对不上的一律拒绝安装。',
+          '从 GitHub Releases 自动获取新版本，并下载匹配本机的安装包。'
+          '校验通过后打开 Android 系统安装界面，最终安装需要系统确认。',
           style: const TextStyle(
             color: TvTheme.textSecondary,
             fontSize: 12 * TvTheme.fontScale,
@@ -610,14 +608,14 @@ class _SettingsViewState extends State<SettingsView> {
         _boolRow(
           value: update.autoCheck,
           label: '自动检查',
-          hint: '启动 App 时检查一次，最多 6 小时一次；检查只问「文件在不在」，不下载内容',
+          hint: '每次打开 App 自动检查 GitHub 正式版本，无新版时不下载',
           onChanged: (v) => unawaited(update.setAutoCheck(v)),
         ),
         SizedBox(height: 10 * UiAdaptive.scale),
         _boolRow(
           value: update.autoInstall,
-          label: '直接安装',
-          hint: '打开后，下载完直接跳系统安装界面，不再询问',
+          label: '自动下载并安装',
+          hint: '发现新版后自动下载，校验通过后打开系统安装界面',
           onChanged: (v) => unawaited(update.setAutoInstall(v)),
         ),
         SizedBox(height: 10 * UiAdaptive.scale),
@@ -688,7 +686,7 @@ class _SettingsViewState extends State<SettingsView> {
         if (!configured) ...[
           SizedBox(height: 10 * UiAdaptive.scale),
           const Text(
-            '更新走的是上面那份 WebDAV 配置。先填好地址、点「保存」才能检查更新。',
+            '更新来源：GitHub · vialoyed-ctrl/TvPlayer，无需配置 WebDAV。',
             style: TextStyle(
               color: TvTheme.accent,
               fontSize: 12 * TvTheme.fontScale,

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/update_info.dart';
-import '../services/webdav_client.dart';
+import '../services/github_update_client.dart';
 import '../tv_ui/tv_theme.dart';
 import '../tv_ui/ui_adaptive.dart';
 
@@ -16,15 +16,11 @@ import '../tv_ui/ui_adaptive.dart';
 Future<bool?> showUpdateDialog(
   BuildContext context, {
   required ApkInfo? apk,
-  required WebDavStat? remote,
+  required GitHubReleaseApk? remote,
   required InstalledAppInfo current,
 }) {
   final sizeText = remote == null ? '' : formatBytes(remote.sizeBytes);
   final newVersion = apk?.versionDisplay ?? '未知';
-
-  /// 版本号没变。用户很可能只是重新打了个包、没改 pubspec.yaml 里的版本号 ——
-  /// 这在这个项目里是常态，所以不拦，但要说清楚，免得他以为检测错了。
-  final sameVersionCode = apk != null && apk.versionCode <= current.versionCode;
 
   return showDialog<bool>(
     context: context,
@@ -53,18 +49,6 @@ Future<bool?> showUpdateDialog(
           _row('当前版本', current.display),
           _row('云端版本', newVersion),
           if (sizeText.isNotEmpty) _row('安装包大小', sizeText),
-          if (sameVersionCode) ...[
-            SizedBox(height: 10 * UiAdaptive.scale),
-            const Text(
-              '注意：云端这个包的版本号和当前一样。如果你是重新打了包但没改 '
-              'pubspec.yaml 里的版本号，这是正常的，可以继续安装。',
-              style: TextStyle(
-                color: TvTheme.accent,
-                fontSize: 12 * TvTheme.fontScale,
-                height: 1.6,
-              ),
-            ),
-          ],
           SizedBox(height: 12 * UiAdaptive.scale),
           const Text(
             '点「立即安装」会打开系统的安装界面，需要你在那里再确认一次。'

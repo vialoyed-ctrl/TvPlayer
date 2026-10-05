@@ -28,8 +28,13 @@ String formatBytes(int bytes) {
 class InstalledAppInfo {
   final int versionCode;
   final String? versionName;
+  final String apkFileName;
 
-  const InstalledAppInfo({this.versionCode = 0, this.versionName});
+  const InstalledAppInfo({
+    this.versionCode = 0,
+    this.versionName,
+    this.apkFileName = kUpdateApkFileName,
+  });
 
   bool get known => versionCode > 0;
 

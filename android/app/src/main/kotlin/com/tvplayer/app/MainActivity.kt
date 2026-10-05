@@ -255,7 +255,8 @@ class MainActivity : FlutterActivity() {
         val info = installedPackageInfo(packageName, 0)
         return mapOf(
             "versionCode" to versionCodeOf(info),
-            "versionName" to info.versionName
+            "versionName" to info.versionName,
+            "apkFileName" to (if (android.os.Process.is64Bit()) "tvplayer_64bit.apk" else "tvplayer_32bit.apk")
         )
     }
 

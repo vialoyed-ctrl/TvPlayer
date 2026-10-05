@@ -37,7 +37,7 @@ void main() async {
   await SyncService.instance.init();
 
   // 5. 更新服务：读一下本机版本号，并按需排一个延迟检查。
-  //    没配置 WebDAV 或关掉了自动检查时它什么都不做。
+  //    每次打开默认检查 GitHub Releases，并自动下载和启动系统安装。
   await UpdateService.instance.init();
 
   // 6. Enforce TV landscape orientation

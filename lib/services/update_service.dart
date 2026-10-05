@@ -3,12 +3,13 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 
 import '../models/update_info.dart';
 import '../tv_ui/app_navigator.dart';
 import '../views/update_dialog.dart';
 import 'storage_service.dart';
-import 'webdav_client.dart';
+import 'github_update_client.dart';
 
 /// 更新流程当前走到哪一步，给设置页画状态用。
 enum UpdatePhase { idle, checking, downloading, ready, installing, failed }
@@ -21,25 +22,16 @@ class UpdateException implements Exception {
   String toString() => message;
 }
 
-/// 自动更新的编排层。
-///
-/// 约定很简单：**云端同步目录里放了 `tvplayer_32bit.apk` 就更新，没放就不更新。**
-/// 于是「发新版」这个动作退化成「把新包拖进网盘目录」，不需要再维护一份版本
-/// 清单文件，也不需要服务端做任何配合。
-///
-/// 四个刻意的设计：
-///
-/// 1. **先只问、不下载**。检查走 HEAD / PROPFIND 拿 `Content-Length` + `ETag`，
-///    20 MB 的包不可能每次启动都拉一遍。
-/// 2. **用指纹去重**。把「已经验过、交给系统安装过」的那份包的指纹记下来，
-///    指纹没变就不再提示 —— 否则只要那个文件还躺在网盘里，每次启动都会弹框。
-/// 3. **装之前先验包**。包名不是自己、签名和已装的不一样，都要在下载完之后
-///    就拦下来并说清楚原因，而不是丢给系统安装器报一个 `INSTALL_FAILED_...`。
-/// 4. **不自动跳安装界面**（除非用户明确打开「发现后直接安装」）。装下去不可逆，
-///    而且过程中 App 会退出，让用户点一次更稳妥。
-class UpdateService extends ChangeNotifier {
+/// GitHub Releases 自动检查、下载、验证和系统安装流程。
+class UpdateService extends ChangeNotifier with WidgetsBindingObserver {
   static final UpdateService instance = UpdateService._internal();
-  UpdateService._internal();
+  UpdateService._internal() : _client = GitHubUpdateClient();
+  @visibleForTesting
+  UpdateService.forTesting(this._client);
+  final GitHubUpdateClient _client;
+  bool _foreground = true;
+  bool _pendingInstall = false;
+  String? _launchedFingerprint;
 
   static const MethodChannel _channel = MethodChannel('tvplayer/update');
 
@@ -47,9 +39,6 @@ class UpdateService extends ChangeNotifier {
   ///
   /// 真身在 `models/update_info.dart`，这里只是给界面用的短别名。
   static const String kApkFileName = kUpdateApkFileName;
-
-  /// 自动检查的最小间隔。后台静默跑的检查不该比这更频繁。
-  static const Duration autoCheckInterval = Duration(hours: 6);
 
   /// 启动后隔多久做第一次自动检查。避开首屏那批接口请求抢带宽。
   static const Duration firstCheckDelay = Duration(seconds: 8);
@@ -76,8 +65,8 @@ class UpdateService extends ChangeNotifier {
     return '正在下载…';
   }
 
-  WebDavStat? _remote;
-  WebDavStat? get remote => _remote;
+  GitHubReleaseApk? _remote;
+  GitHubReleaseApk? get remote => _remote;
 
   /// 上一次检查有没有**真的问到**云端。
   ///
@@ -101,11 +90,13 @@ class UpdateService extends ChangeNotifier {
   bool get nativeUnavailable => _nativeUnavailable;
 
   bool _busy = false;
-  bool get busy => _busy;
+  bool _installing = false;
+  bool get busy => _busy || _installing;
 
   Timer? _startupTimer;
 
-  bool get configured => _storage.webDavConfig.isConfigured;
+  bool get configured => true;
+  String get apkFileName => _current.apkFileName;
   bool get autoCheck => _storage.updateAutoCheck;
   bool get autoInstall => _storage.updateAutoInstall;
 
@@ -122,18 +113,42 @@ class UpdateService extends ChangeNotifier {
   Future<void> init() async {
     await _storage.init();
     _current = await _loadCurrentVersion();
-    if (_storage.updateAutoCheck && configured) {
-      _startupTimer = Timer(firstCheckDelay, () => unawaited(runAutoCheck()));
+    WidgetsBinding.instance.addObserver(this);
+    _scheduleAutoCheck();
+  }
+
+  void _scheduleAutoCheck() {
+    _startupTimer?.cancel();
+    if (!autoCheck) return;
+    _startupTimer = Timer(firstCheckDelay, () => unawaited(runAutoCheck()));
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _foreground = state == AppLifecycleState.resumed;
+    if (!_foreground) {
+      _startupTimer?.cancel();
+      return;
+    }
+    if (_pendingInstall && autoInstall) {
+      unawaited(_resumePendingInstallation());
+    } else {
+      _scheduleAutoCheck();
     }
   }
 
-  /// 启动时的自动检查：带节流，而且只处理「还没处理过」的那份包。
+  Future<void> _resumePendingInstallation() async {
+    _pendingInstall = false;
+    if (await canInstallPackages()) {
+      await install();
+    } else {
+      _set(UpdatePhase.ready, '安装包已下载，请允许安装后点“立即安装”');
+    }
+  }
+
+  /// 每次启动或返回前台都检查；已安装版本不会再次下载。
   Future<void> runAutoCheck() async {
-    if (!_storage.updateAutoCheck) return;
-    if (!configured) return;
-    final now = DateTime.now().millisecondsSinceEpoch;
-    final last = _storage.updateLastCheckAt;
-    if (last > 0 && now - last < autoCheckInterval.inMilliseconds) return;
+    if (!autoCheck || !_foreground) return;
     await _run(silent: true);
   }
 
@@ -156,16 +171,8 @@ class UpdateService extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// WebDAV 配置被改过（换了地址 / 账号）。
-  ///
-  /// 上一台服务器问到的结果对新地址没有任何意义：留着会让设置页显示一个
-  /// 已经不属于当前配置的「云端安装包」状态。清空重来。
-  void onConfigChanged() {
-    _remote = null;
-    _apk = null;
-    _remoteKnown = false;
-    _set(UpdatePhase.idle, '');
-  }
+  /// WebDAV 同步配置不影响 GitHub 更新。
+  void onConfigChanged() {}
 
   /// 有没有「安装未知应用」的权限。设置页要显示它，所以做成公开的。
   Future<bool> canInstallPackages() async {
@@ -198,6 +205,17 @@ class UpdateService extends ChangeNotifier {
   /// 真正「装」的动作是系统做的，这里只负责递过去；没有安装权限时把用户
   /// 送到设置页，而不是丢一句「失败了」让他自己猜。
   Future<void> install() async {
+    if (_installing) return;
+    _installing = true;
+    try {
+      await _install();
+    } finally {
+      _installing = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> _install() async {
     if (_nativeUnavailable) {
       _set(UpdatePhase.failed, '原生模块不可用，请重新构建 App 后再试');
       return;
@@ -208,18 +226,44 @@ class UpdateService extends ChangeNotifier {
       return;
     }
 
+    if (_remote == null || _apk == null) {
+      _set(UpdatePhase.failed, '请先检查并下载新版本');
+      return;
+    }
+    try {
+      if (!await _client.matches(file, _remote!)) {
+        throw const UpdateException('安装包校验失败，请重新检查更新');
+      }
+      final info = await _readApkInfo(file.path);
+      if (info == null) throw const UpdateException('无法读取安装包');
+      _current = await _loadCurrentVersion();
+      if (!_current.known) throw const UpdateException('无法读取当前版本');
+      _verify(info);
+      if (info.versionCode <= _current.versionCode) {
+        _pendingInstall = false;
+        _set(UpdatePhase.idle, '当前已是最新版本');
+        return;
+      }
+    } catch (e) {
+      _pendingInstall = false;
+      _set(UpdatePhase.failed, '$e');
+      return;
+    }
     if (!await canInstallPackages()) {
+      _pendingInstall = true;
       _set(UpdatePhase.failed, '还没允许本应用安装其他应用，正在跳到系统设置…');
       await openInstallPermission();
       return;
     }
 
+    _pendingInstall = false;
     _set(UpdatePhase.installing, '正在打开系统安装界面…');
     try {
       final m = await _invokeMap('installApk', {'path': file.path});
       if (m?['ok'] != true) {
         throw UpdateException(m?['message'] as String? ?? '打开安装界面失败');
       }
+      _launchedFingerprint = _remote?.fingerprint;
       _set(UpdatePhase.ready, m?['message'] as String? ?? '已打开系统安装界面');
     } on UpdateException catch (e) {
       _set(UpdatePhase.failed, e.message);
@@ -229,141 +273,88 @@ class UpdateService extends ChangeNotifier {
   // --- 主流程 -------------------------------------------------------------
 
   Future<void> _run({required bool silent}) async {
-    if (_busy) return;
+    if (busy) return;
     if (_nativeUnavailable) {
-      _set(UpdatePhase.failed, '原生模块不可用，请重新构建 App 后再试');
+      _set(UpdatePhase.failed, '原生模块不可用，请安装完整版本后再试');
       return;
     }
-    if (!configured) {
-      _set(UpdatePhase.failed, '先在上面填好 WebDAV 地址并保存');
-      return;
-    }
-
     _busy = true;
-    WebDavClient? client;
     try {
-      // 先清状态位再改文案：否则这一瞬间界面会拿着上一轮的 remoteKnown
-      // 配上「正在检查」的新消息，显示成一个已经过时的结论。
       _remoteKnown = false;
-      _set(UpdatePhase.checking, '正在检查云端有没有 $kApkFileName…');
-      client = WebDavClient(_storage.webDavConfig);
-
-      // 和同步走同一条路径：先确认目录在，再去问里面的文件。
-      //
-      // 不确认的话，文件名会被拼到一个可能还不存在的目录上；而自建 WebDAV 对
-      // 「路径不存在」回的未必是 404 —— 有的回 403。那样「目录还没建出来」就会
-      // 被报成「这个账号没权限」，把人往查密码的方向带，白折腾半天。
-      await client.ensureCollection();
-
-      final stat = await client.stat(kApkFileName);
-      // 走到这里说明云端给了明确答复：要么有包（stat 非空），要么确实没有（null）。
+      _set(UpdatePhase.checking, '正在检查 GitHub 最新正式版本…');
+      _current = await _loadCurrentVersion();
+      if (!_current.known) throw const UpdateException('无法读取当前版本');
+      final release = await _client.latest(apkFileName);
+      _remote = release;
       _remoteKnown = true;
       await _storage.setUpdateLastCheckAt(
         DateTime.now().millisecondsSinceEpoch,
       );
-
-      if (stat == null) {
-        // 约定：没放就不更新。这不是错误，状态回到 idle。
-        _remote = null;
+      if (release == null) {
         _apk = null;
-        _set(UpdatePhase.idle, '云端没有 $kApkFileName，当前已是最新');
+        _set(UpdatePhase.idle, 'GitHub 暂无正式发布版本');
         return;
       }
-      _remote = stat;
-
-      final fp = stat.fingerprint;
-      if (fp == null && silent) {
-        // 判断不了「变没变」。自动流程不能因为判断不了就每次启动都下载
-        // 20 MB 再弹一遍框，所以这里只提示、不动手；用户想装就自己点。
-        _set(UpdatePhase.idle, '云端有安装包，但服务器没给大小和修改时间，无法判断是否为新包');
+      if (!release.isNewerThan(_current.versionName)) {
+        _apk = null;
+        _set(UpdatePhase.idle, '当前已是最新版本 ${_current.display}');
         return;
       }
-
-      final handled = _storage.updateHandledFingerprint;
-      if (silent && fp != null && fp == handled) {
-        // 还是上次那个包，已经交给系统安装过了。别再弹一遍。
-        _set(
-          UpdatePhase.idle,
-          '云端还是上次那个安装包（${formatBytes(stat.sizeBytes)}），已跳过',
-        );
+      // 用户从安装界面返回时，不在同一进程反复打开同一个安装包。
+      if (silent && _launchedFingerprint == release.fingerprint) {
+        _set(UpdatePhase.ready, '新版本已就绪，可在设置中再次安装');
         return;
       }
-
       final file = await _localApkFile();
-      final hasLocal = await file.exists();
-      // 本机已经有同一份包就别再下一遍 20 MB。
-      final needDownload = !(hasLocal && fp != null && fp == handled);
-
-      if (needDownload) {
-        await _download(client, stat, file);
+      if (!await _client.matches(file, release)) {
+        _received = 0;
+        _total = release.sizeBytes;
+        _set(UpdatePhase.downloading, '发现 ${release.tag}，正在下载安装包…');
+        var lastPercent = -1;
+        await _client.download(
+          release,
+          file,
+          onProgress: (received, total) {
+            _received = received;
+            _total = total > 0 ? total : release.sizeBytes;
+            final percent = (received * 100 / _total).floor();
+            if (percent == lastPercent) return;
+            lastPercent = percent;
+            notifyListeners();
+          },
+        );
       }
-
-      _set(UpdatePhase.checking, '正在校验安装包…');
+      _set(UpdatePhase.checking, '正在核对安装包和签名…');
       final info = await _readApkInfo(file.path);
-      _apk = info;
-      if (info == null) {
-        throw const UpdateException('读不出安装包的包信息，文件可能不完整，请重试');
-      }
+      if (info == null) throw const UpdateException('安装包无法读取，请重新下载');
       _verify(info);
-
-      // 验过包、确实能用，才记指纹。下载完就记的话，一个坏包会被永远跳过，
-      // 用户连报错都看不到。
-      if (fp != null) await _storage.setUpdateHandledFingerprint(fp);
-
-      final newer = info.versionCode > _current.versionCode;
-      _set(
-        UpdatePhase.ready,
-        newer
-            ? '发现新版本 ${info.versionDisplay}（当前 ${_current.display}）'
-            : '安装包已就绪：${info.versionDisplay}（版本号没有变化）',
-      );
-
-      if (_storage.updateAutoInstall) {
-        await install();
-      } else {
+      if (!listEquals(
+        GitHubReleaseApk.versionParts(info.versionName ?? ''),
+        GitHubReleaseApk.versionParts(release.tag),
+      )) {
+        throw const UpdateException('发布版本与 APK 版本不一致，已停止安装');
+      }
+      if (info.versionCode <= _current.versionCode) {
+        throw const UpdateException('发布的 APK 版本号没有递增，已停止安装');
+      }
+      _apk = info;
+      _set(UpdatePhase.ready, '新版本 ${info.versionDisplay} 已下载');
+      if (autoInstall) {
+        if (_foreground) {
+          await install();
+        } else {
+          _pendingInstall = true;
+        }
+      } else if (_foreground) {
         await _promptInstall();
       }
-    } on WebDavException catch (e) {
-      _set(UpdatePhase.failed, e.message);
-    } on UpdateException catch (e) {
-      _set(UpdatePhase.failed, e.message);
     } catch (e) {
-      _set(UpdatePhase.failed, '检查更新失败：$e');
+      _apk = null;
+      _set(UpdatePhase.failed, '更新失败：$e');
     } finally {
-      client?.close();
       _busy = false;
       notifyListeners();
     }
-  }
-
-  Future<void> _download(
-    WebDavClient client,
-    WebDavStat stat,
-    File file,
-  ) async {
-    _received = 0;
-    _total = stat.hasSize ? stat.sizeBytes : 0;
-    _set(UpdatePhase.downloading, '正在下载安装包（${formatBytes(stat.sizeBytes)}）…');
-
-    var lastPercent = -1;
-    await client.downloadTo(
-      kApkFileName,
-      file,
-      expectedSize: stat.sizeBytes,
-      onProgress: (received, total) {
-        final t = total > 0 ? total : stat.sizeBytes;
-        _received = received;
-        _total = t > 0 ? t : 0;
-        if (_total > 0) {
-          // 别为每几 KB 都重建一次界面：百分比没变就不通知。
-          final percent = (received * 100 / _total).floor();
-          if (percent == lastPercent) return;
-          lastPercent = percent;
-        }
-        notifyListeners();
-      },
-    );
-    _received = _total > 0 ? _total : _received;
   }
 
   /// 装之前的四道检查。任何一道不过都抛 [UpdateException]。
@@ -412,7 +403,7 @@ class UpdateService extends ChangeNotifier {
     final base = await _appFilesDir();
     final dir = Directory('$base/update');
     if (!await dir.exists()) await dir.create(recursive: true);
-    return File('${dir.path}/$kApkFileName');
+    return File('${dir.path}/$apkFileName');
   }
 
   Future<String> _appFilesDir() async {
@@ -439,6 +430,7 @@ class UpdateService extends ChangeNotifier {
       return InstalledAppInfo(
         versionCode: (m['versionCode'] as num?)?.toInt() ?? 0,
         versionName: m['versionName'] as String?,
+        apkFileName: m['apkFileName'] as String? ?? kUpdateApkFileName,
       );
     } on MissingPluginException {
       // 只热重载、没重新构建 APK 时会走到这里。不能让它把启动流程打断。
@@ -481,6 +473,7 @@ class UpdateService extends ChangeNotifier {
   void dispose() {
     _startupTimer?.cancel();
     _startupTimer = null;
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 }

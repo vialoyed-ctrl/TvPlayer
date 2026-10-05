@@ -323,9 +323,8 @@ class StorageService extends ChangeNotifier {
     await _prefs!.setBool(_keyUpdateAutoCheck, value);
   }
 
-  /// 发现新版本后不询问、直接拉系统安装界面。默认关 —— 打开 App 突然跳出
-  /// 一个安装界面，比多点一次「立即安装」更让人措手不及。
-  bool get updateAutoInstall => _prefs?.getBool(_keyUpdateAutoInstall) ?? false;
+  /// 默认自动下载新版本，并调用 Android 系统安装界面。
+  bool get updateAutoInstall => _prefs?.getBool(_keyUpdateAutoInstall) ?? true;
 
   Future<void> setUpdateAutoInstall(bool value) async {
     await init();
