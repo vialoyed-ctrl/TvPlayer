@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:cached_network_image/cached_network_image.dart';
+
+import '../tv_ui/poster_image.dart';
 
 import '../providers/history_provider.dart';
 import '../models/history_item.dart';
@@ -229,7 +230,7 @@ class _HistoryContent extends StatelessWidget {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            CachedNetworkImage(imageUrl: item.cover, fit: BoxFit.cover),
+            PosterImage(imageUrl: item.cover, fit: BoxFit.cover),
             // Episode & Progress Badge
             Positioned(
               left: 0,
@@ -313,7 +314,7 @@ class _HistoryContent extends StatelessWidget {
             child: Stack(
               fit: StackFit.expand,
               children: [
-                CachedNetworkImage(imageUrl: item.cover, fit: BoxFit.cover),
+                PosterImage(imageUrl: item.cover, fit: BoxFit.cover),
                 Positioned(
                   left: 0,
                   right: 0,

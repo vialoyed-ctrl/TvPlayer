@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:html/parser.dart' as html_parser;
+import 'package:html/dom.dart' as dom;
 import 'package:flutter/foundation.dart';
 
 import '../models/vod_item.dart';
@@ -28,7 +29,9 @@ enum PlayProbe {
 }
 
 class VideoSiteScraper {
-  final VideoSiteClient _client = VideoSiteClient.instance;
+  VideoSiteScraper({VideoSiteClient? client})
+    : _client = client ?? VideoSiteClient.instance;
+  final VideoSiteClient _client;
 
   String? _cachedSearchToken;
   List<String> _cachedHotWords = const [];
@@ -235,6 +238,7 @@ class VideoSiteScraper {
   Future<VodDetail?> getVodDetail(String detailPath) async {
     final html = await _client.getHtml(detailPath);
     final doc = html_parser.parse(html);
+    final hidden = _hiddenNodes(doc);
 
     // Extract title: check .detail-title children to avoid fake watermarks
     String title = '';
@@ -245,7 +249,7 @@ class VideoSiteScraper {
         if (style.contains('display: none') || style.contains('display:none')) {
           continue;
         }
-        final text = child.text.trim();
+        final text = _visibleText(child, hidden);
         final lower = text.toLowerCase();
         if (lower.contains('kekys') ||
             lower.contains('kkys') ||
@@ -265,32 +269,16 @@ class VideoSiteScraper {
     }
     if (title.isEmpty) {
       final titleEle = doc.querySelector('.detail-title, .title, h1');
-      title = cleanTitle(titleEle?.text.trim() ?? '未知影片');
+      title = cleanTitle(
+        titleEle == null ? '未知影片' : _visibleText(titleEle, hidden),
+      );
     }
 
-    // Extract cover: find first non-placeholder img
-    String rawCover = '';
-    for (final img in doc.querySelectorAll(
-      '.detail-pic img, .cover img, .detail-thumb img, #itemCoverImg img, .vod-img img',
-    )) {
-      if (img.attributes['id'] == 'noneCoverImg') continue;
-      final orig =
-          img.attributes['data-original'] ??
-          img.attributes['data-src'] ??
-          img.attributes['src'] ??
-          '';
-      if (orig.isEmpty ||
-          orig.contains('placeholder') ||
-          orig.contains('logo') ||
-          orig.contains('empty-box') ||
-          orig.contains('avatar') ||
-          orig.contains('douban') ||
-          orig.contains('douyin')) {
-        continue;
-      }
-      rawCover = orig;
-      break;
-    }
+    final rawCover = _coverFrom(
+      doc.querySelectorAll(
+        '.detail-pic img, .cover img, .detail-thumb img, #itemCoverImg img, .vod-img img',
+      ),
+    );
     final cover = VideoSiteClient.fixImageUrl(rawCover);
 
     // Metadata
@@ -579,8 +567,102 @@ class VideoSiteScraper {
     }
   }
 
+  static Set<dom.Element> _hiddenNodes(dom.Document doc) {
+    final hidden = <dom.Element>{};
+    for (final style in doc.querySelectorAll('style')) {
+      for (final rule in RegExp(
+        r'([^{}]+)\{([^{}]*)\}',
+      ).allMatches(style.text)) {
+        if (!RegExp(
+          r'(?:display\s*:\s*none|visibility\s*:\s*hidden)',
+          caseSensitive: false,
+        ).hasMatch(rule.group(2)!)) {
+          continue;
+        }
+        for (final selector in rule.group(1)!.split(',')) {
+          try {
+            final value = selector.trim();
+            // package:html 不支持 nth-child(odd/even)，站点正用它隐藏干扰标题。
+            final parity = RegExp(r':nth-child\(\s*(odd|even|2n\+1|2n)\s*\)$')
+                .firstMatch(value);
+            if (parity == null) {
+              hidden.addAll(doc.querySelectorAll(value));
+            } else {
+              final odd = parity.group(1) == 'odd' || parity.group(1) == '2n+1';
+              final base = value.substring(0, parity.start);
+              hidden.addAll(
+                doc.querySelectorAll(base).where((el) {
+                  final index = el.parent?.children.indexOf(el) ?? -1;
+                  return index >= 0 && ((index + 1).isOdd == odd);
+                }),
+              );
+            }
+          } catch (_) {
+            /* Ignore CSS selectors not supported by the HTML parser. */
+          }
+        }
+      }
+    }
+    hidden.addAll(doc.querySelectorAll('[hidden], [aria-hidden="true"]'));
+    for (final el in doc.querySelectorAll('[style]')) {
+      if (RegExp(
+        r'(?:display\s*:\s*none|visibility\s*:\s*hidden)',
+        caseSensitive: false,
+      ).hasMatch(el.attributes['style']!)) {
+        hidden.add(el);
+      }
+    }
+    return hidden;
+  }
+
+  static String _visibleText(dom.Element el, Set<dom.Element> hidden) {
+    for (
+      dom.Element? ancestor = el;
+      ancestor != null;
+      ancestor = ancestor.parent
+    ) {
+      if (hidden.contains(ancestor)) return '';
+    }
+    String walk(dom.Node node) {
+      if (node is dom.Text) return node.data;
+      if (node is dom.Element &&
+          (hidden.contains(node) ||
+              node.localName == 'script' ||
+              node.localName == 'style')) {
+        return '';
+      }
+      return node.nodes.map(walk).join('');
+    }
+
+    return walk(el).replaceAll(RegExp(r'\s+'), ' ').trim();
+  }
+
+  static String _coverFrom(List<dom.Element> images) {
+    for (final image in images) {
+      if (image.id == 'noneCoverImg') continue;
+      for (final attribute in [
+        'data-original',
+        'data-src',
+        'data-lazy-src',
+        'src',
+      ]) {
+        final value = (image.attributes[attribute] ?? '').trim();
+        if (value.isEmpty ||
+            RegExp(
+              r'placeholder|empty-box|logo|avatar',
+              caseSensitive: false,
+            ).hasMatch(value)) {
+          continue;
+        }
+        if (VideoSiteClient.fixImageUrl(value).isNotEmpty) return value;
+      }
+    }
+    return '';
+  }
+
   List<VodItem> _parseVodItems(String html) {
     final doc = html_parser.parse(html);
+    final hidden = _hiddenNodes(doc);
     final items = <VodItem>[];
     final seenIds = <String>{};
 
@@ -591,46 +673,18 @@ class VideoSiteScraper {
       final id = idMatch.group(1)!;
       if (seenIds.contains(id)) continue;
 
-      // Cover parsing: pick the first real image (not noneCoverImg, not placeholder)
-      String rawCover = '';
-      for (final img in a.querySelectorAll('img')) {
-        if (img.attributes['id'] == 'noneCoverImg') continue;
-        final orig =
-            img.attributes['data-original'] ??
-            img.attributes['data-src'] ??
-            img.attributes['src'] ??
-            '';
-        if (orig.isEmpty ||
-            orig.contains('placeholder') ||
-            orig.contains('empty-box') ||
-            orig.contains('logo_horizontal') ||
-            orig.contains('user-avatar') ||
-            orig.contains('avatar') ||
-            orig.contains('douban') ||
-            orig.contains('douyin')) {
-          continue;
-        }
-        rawCover = orig;
-        break;
-      }
-      if (rawCover.isEmpty) {
-        final anyImg = a.querySelector('img');
-        rawCover =
-            anyImg?.attributes['data-original'] ??
-            anyImg?.attributes['src'] ??
-            '';
-      }
+      final rawCover = _coverFrom(a.querySelectorAll('img'));
 
       // Title parsing: look for visible, non-watermark title element
       String title = '';
       for (final el in a.querySelectorAll(
-        '.v-item-title, .carousel-item-title, .module-item-title, .item-title, .title, .name, h4, h3, h2, h1',
+        '.v-item-title, .v-title, .carousel-item-title, .module-item-title, .item-title, .title, .name, h4, h3, h2, h1',
       )) {
         final style = el.attributes['style'] ?? '';
         if (style.contains('display: none') || style.contains('display:none')) {
           continue;
         }
-        final t = el.text.trim();
+        final t = _visibleText(el, hidden);
         if (t.isEmpty) continue;
         // Check if text contains watermark
         final lower = t.toLowerCase();
@@ -646,7 +700,7 @@ class VideoSiteScraper {
         final cleaned = cleanTitle(t);
         if (cleaned.isNotEmpty &&
             !cleaned.startsWith('更新至') &&
-            !cleaned.startsWith('全') &&
+            !RegExp(r'^全\s*\d+\s*集').hasMatch(cleaned) &&
             cleaned != 'HD') {
           title = cleaned;
           break;
@@ -658,7 +712,7 @@ class VideoSiteScraper {
         final cleaned = cleanTitle(titleAttr);
         if (cleaned.isNotEmpty &&
             !cleaned.startsWith('更新至') &&
-            !cleaned.startsWith('全')) {
+            !RegExp(r'^全\s*\d+\s*集').hasMatch(cleaned)) {
           title = cleaned;
         }
       }

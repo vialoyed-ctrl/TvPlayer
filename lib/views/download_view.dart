@@ -1,4 +1,5 @@
-import 'package:cached_network_image/cached_network_image.dart';
+import '../tv_ui/poster_image.dart';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -396,7 +397,7 @@ class _DownloadViewState extends State<DownloadView> {
             child: SizedBox(
               width: 54 * UiAdaptive.scale,
               height: 72 * UiAdaptive.scale,
-              child: CachedNetworkImage(
+              child: PosterImage(
                 imageUrl: task.cover,
                 fit: BoxFit.cover,
                 placeholder: (c, u) => Container(color: TvTheme.surfaceLighter),

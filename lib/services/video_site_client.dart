@@ -23,17 +23,21 @@ class VideoSiteClient {
           ),
         );
   static String get baseUrl => siteUrls.isEmpty ? '' : siteUrls.first;
-  static const List<String> imageCdnMirrors = [
+  static const List<String> _fallbackImageMirrors = [
+    'https://vres.wkcyvs.cn',
     'https://vres.esadj.com',
     'https://vres.cyscyy.com',
-    'https://vres.enbymae.com',
   ];
+  static List<String> _discoveredImageMirrors = const [];
+  static List<String> get imageCdnMirrors =>
+      {..._discoveredImageMirrors, ..._fallbackImageMirrors}.toList();
 
   final Dio _dio;
   final Map<String, String> _cookies = {};
   final List<String> _sites;
   late String _activeBaseUrl;
   String get activeBaseUrl => _activeBaseUrl;
+  DateTime? _lastImageConfigCheck;
 
   VideoSiteClient({Dio? dio, List<String>? sites})
     : _dio = dio ?? Dio(),
@@ -54,12 +58,43 @@ class VideoSiteClient {
 
   /// Fix image URL: maps relative /vod1/ paths to fast CDN mirror
   static String fixImageUrl(String? rawUrl) {
-    if (rawUrl == null || rawUrl.isEmpty) {
+    final value = rawUrl?.trim() ?? '';
+    if (value.isEmpty) {
       return '';
     }
-    if (rawUrl.startsWith('http')) return rawUrl;
-    if (rawUrl.startsWith('/')) return '${imageCdnMirrors.first}$rawUrl';
-    return '${imageCdnMirrors.first}/$rawUrl';
+    final uri = Uri.tryParse(value);
+    if (uri == null) return '';
+    if (value.startsWith('//')) return 'https:$value';
+    if (uri.hasScheme) {
+      return uri.scheme == 'http' || uri.scheme == 'https'
+          ? uri.toString()
+          : '';
+    }
+    final base = value.startsWith('/vod1/') || value.startsWith('vod1/')
+        ? imageCdnMirrors.first
+        : instance.activeBaseUrl;
+    if (base.isEmpty) return '';
+    return Uri.parse('$base/').resolve(value).toString();
+  }
+
+  static List<String> imageCandidates(String rawUrl) {
+    final normalized = fixImageUrl(rawUrl);
+    if (normalized.isEmpty) return const [];
+    final uri = Uri.parse(normalized);
+    final known = imageCdnMirrors.any(
+      (base) => Uri.parse(base).host == uri.host,
+    );
+    return {
+      normalized,
+      if (known)
+        ...imageCdnMirrors.map(
+          (base) => Uri.parse(base)
+              .resolveUri(
+                Uri(path: uri.path, query: uri.hasQuery ? uri.query : null),
+              )
+              .toString(),
+        ),
+    }.toList();
   }
 
   bool _isChallenge(Response<String> response) {
@@ -67,6 +102,57 @@ class VideoSiteClient {
     return response.statusCode == 850 ||
         body.contains('Protected by cdndefend') ||
         body.contains('cdndefend_js_cookie=');
+  }
+
+  Future<void> _refreshImageConfig(String body, String site) async {
+    final last = _lastImageConfigCheck;
+    if (last != null &&
+        DateTime.now().difference(last) < const Duration(minutes: 5)) {
+      return;
+    }
+    final match = RegExp(
+      r'''<script\b[^>]*\bsrc\s*=\s*["']([^"']*/rdul\.js(?:\?[^"']*)?)["']''',
+      caseSensitive: false,
+    ).firstMatch(body);
+    if (match == null) return;
+    final script = Uri.parse('$site/').resolve(match.group(1)!);
+    if (script.scheme != 'https' || script.host.isEmpty) return;
+    _lastImageConfigCheck = DateTime.now();
+    try {
+      final response = await _dio.get<String>(
+        script.toString(),
+        options: Options(
+          sendTimeout: const Duration(seconds: 3),
+          receiveTimeout: const Duration(seconds: 3),
+        ),
+      );
+      if (response.statusCode != 200) return;
+      final array = RegExp(r'\bRDUL\s*=\s*\[([^\]]*)\]')
+          .firstMatch(response.data ?? '');
+      if (array == null) return;
+      final domains = <String>[];
+      for (final value in RegExp(
+        r'''["'](https://[^"']+)["']''',
+      ).allMatches(array.group(1)!)) {
+        final uri = Uri.tryParse(value.group(1)!);
+        if (uri == null ||
+            uri.host.isEmpty ||
+            uri.userInfo.isNotEmpty ||
+            !uri.host.contains('.') ||
+            RegExp(r'^[0-9.]+$').hasMatch(uri.host) ||
+            uri.hasQuery ||
+            uri.hasFragment ||
+            (uri.path.isNotEmpty && uri.path != '/')) {
+          continue;
+        }
+        domains.add(uri.origin);
+      }
+      if (domains.isNotEmpty) {
+        _discoveredImageMirrors = domains.toSet().toList();
+      }
+    } on DioException {
+      // 配置暂时获取失败时，仍使用上次的有效配置和备用镜像。
+    }
   }
 
   Future<Response<String>> _request(
@@ -128,6 +214,7 @@ class VideoSiteClient {
           continue;
         }
         _activeBaseUrl = site;
+        await _refreshImageConfig(body, site);
         return body;
       } on DioException catch (error) {
         if (error.type == DioExceptionType.cancel) rethrow;

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:cached_network_image/cached_network_image.dart';
+
+import '../tv_ui/poster_image.dart';
 
 import '../providers/home_provider.dart';
 import '../models/vod_item.dart';
@@ -401,7 +402,7 @@ class _HomeViewState extends State<HomeView> {
           fit: StackFit.expand,
           children: [
             // Poster Image
-            CachedNetworkImage(
+            PosterImage(
               imageUrl: item.cover,
               fit: BoxFit.cover,
               placeholder: (context, url) => Container(

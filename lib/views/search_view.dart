@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
-import 'package:cached_network_image/cached_network_image.dart';
+
+import '../tv_ui/poster_image.dart';
 
 import '../providers/search_provider.dart';
 import '../models/vod_item.dart';
@@ -755,7 +756,7 @@ class _SearchContentState extends State<_SearchContent> {
           children: [
             ClipRRect(
               borderRadius: BorderRadius.circular(10),
-              child: CachedNetworkImage(
+              child: PosterImage(
                 imageUrl: item.cover,
                 fit: BoxFit.cover,
                 placeholder: (c, u) => Container(color: TvTheme.surfaceLighter),

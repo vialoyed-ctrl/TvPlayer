@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:cached_network_image/cached_network_image.dart';
+
+import '../tv_ui/poster_image.dart';
 
 import '../models/play_source.dart';
 import '../models/vod_detail.dart';
@@ -108,10 +109,7 @@ class _DetailContentState extends State<_DetailContent> {
         Positioned.fill(
           child: Opacity(
             opacity: 0.15,
-            child: CachedNetworkImage(
-              imageUrl: detail.cover,
-              fit: BoxFit.cover,
-            ),
+            child: PosterImage(imageUrl: detail.cover, fit: BoxFit.cover),
           ),
         ),
 
@@ -133,7 +131,7 @@ class _DetailContentState extends State<_DetailContent> {
                           height: 300 * UiAdaptive.scale,
                           width: double.infinity,
                           color: TvTheme.surfaceLighter,
-                          child: CachedNetworkImage(
+                          child: PosterImage(
                             imageUrl: detail.cover,
                             fit: BoxFit.cover,
                             errorWidget: (c, u, e) => const Center(
