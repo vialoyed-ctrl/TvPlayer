@@ -75,7 +75,10 @@ class _TvFocusWidgetState extends State<TvFocusWidget>
       _animController.forward();
       // Auto-scroll focused element into view
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && _focusNode.hasFocus) {
+        if (mounted &&
+            _focusNode.hasFocus &&
+            FocusManager.instance.highlightMode ==
+                FocusHighlightMode.traditional) {
           Scrollable.ensureVisible(
             context,
             alignment: 0.5,

@@ -9,6 +9,7 @@ import '../tv_ui/tv_theme.dart';
 import '../tv_ui/tv_focus_widget.dart';
 import '../tv_ui/tv_keyboard.dart';
 import '../tv_ui/ui_adaptive.dart';
+import '../tv_ui/poster_grid.dart';
 import 'detail_view.dart';
 
 /// 把焦点从输入框移到搜索结果网格。
@@ -541,19 +542,13 @@ class _SearchContentState extends State<_SearchContent> {
       controller: _scrollController,
       slivers: [
         SliverGrid(
-          gridDelegate: UiAdaptive.isPhone
-              ? const SliverGridDelegateWithMaxCrossAxisExtent(
-                  maxCrossAxisExtent: 130,
-                  mainAxisSpacing: 12,
-                  crossAxisSpacing: 10,
-                  childAspectRatio: 0.68,
-                )
-              : const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 3,
-                  mainAxisSpacing: 18,
-                  crossAxisSpacing: 16,
-                  childAspectRatio: 0.68,
-                ),
+          gridDelegate: PosterGrid.delegate(
+            context,
+            tvColumns: 3,
+            aspectRatio: 0.68,
+            tvMainSpacing: 18,
+            tvCrossSpacing: 16,
+          ),
           delegate: SliverChildBuilderDelegate(
             (context, idx) => _buildResultCard(
               context,

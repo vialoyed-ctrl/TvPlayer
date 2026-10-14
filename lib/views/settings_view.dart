@@ -234,6 +234,8 @@ class _SettingsViewState extends State<SettingsView> {
             children: [
               _buildHeader(),
               SizedBox(height: 16 * UiAdaptive.scale),
+              _buildLayoutCard(),
+              SizedBox(height: 16 * UiAdaptive.scale),
               _buildWebDavCard(),
               SizedBox(height: 16 * UiAdaptive.scale),
               _buildSyncCard(sync),
@@ -320,6 +322,51 @@ class _SettingsViewState extends State<SettingsView> {
           ...children,
         ],
       ),
+    );
+  }
+
+  Widget _buildLayoutCard() {
+    final storage = context.watch<StorageService>();
+    return _card(
+      icon: Icons.grid_view,
+      title: '显示设置',
+      children: [
+        const Text(
+          '海报列数（首页、搜索、历史）',
+          style: TextStyle(color: TvTheme.textPrimary),
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: [
+            for (final value in [0, 2, 3, 4, 5, 6, 7, 8])
+              TvFocusWidget(
+                onTap: () => unawaited(storage.setPosterColumns(value)),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
+                  decoration: BoxDecoration(
+                    color: storage.posterColumns == value
+                        ? TvTheme.primary
+                        : TvTheme.surfaceLighter,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    value == 0 ? '自动' : '$value 列',
+                    style: TextStyle(
+                      color: storage.posterColumns == value
+                          ? Colors.black
+                          : TvTheme.textPrimary,
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ],
     );
   }
 

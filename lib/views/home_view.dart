@@ -8,6 +8,7 @@ import '../services/download_service.dart';
 import '../tv_ui/tv_theme.dart';
 import '../tv_ui/tv_focus_widget.dart';
 import '../tv_ui/ui_adaptive.dart';
+import '../tv_ui/poster_grid.dart';
 import 'detail_view.dart';
 import 'download_view.dart';
 import 'search_view.dart';
@@ -330,22 +331,13 @@ class _HomeViewState extends State<HomeView> {
             // 手机档：换成「按最大单元宽度切列」，横屏手机上大约 6~7 列。
             // 用 maxCrossAxisExtent 而不是写死列数，是为了不必猜每台手机的逻辑
             // 分辨率 —— 屏宽一点就自动多一列，窄一点自动少一列。
-            gridDelegate: UiAdaptive.isPhone
-                ? const SliverGridDelegateWithMaxCrossAxisExtent(
-                    // 横屏手机约 780~800 逻辑宽，减掉两侧留白后约 7 列。
-                    // 与减半后的字号相比，这个密度下海报和标题的比例是协调的。
-                    maxCrossAxisExtent: 110,
-                    mainAxisSpacing: 12,
-                    crossAxisSpacing: 10,
-                    childAspectRatio: 0.65, // Standard movie poster ratio
-                  )
-                : const SliverGridDelegateWithFixedCrossAxisCount(
-                    // 字号放大 3 倍后，6 列会让标题挤成一两个字，改为 5 列。
-                    crossAxisCount: 5,
-                    mainAxisSpacing: 24,
-                    crossAxisSpacing: 20,
-                    childAspectRatio: 0.65, // Standard movie poster ratio
-                  ),
+            gridDelegate: PosterGrid.delegate(
+              context,
+              tvColumns: 5,
+              aspectRatio: 0.65,
+              tvMainSpacing: 24,
+              tvCrossSpacing: 20,
+            ),
             itemCount: provider.items.length,
             itemBuilder: (context, index) {
               final item = provider.items[index];

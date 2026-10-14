@@ -26,6 +26,21 @@ class StorageService extends ChangeNotifier {
     _prefs ??= await SharedPreferences.getInstance();
   }
 
+  // 仅保存本机布局，不参与跨设备同步。0 表示自动。
+  int get posterColumns {
+    final value = _prefs?.getInt('tv_poster_columns') ?? 0;
+    return value >= 2 && value <= 8 ? value : 0;
+  }
+
+  Future<void> setPosterColumns(int value) async {
+    if (value != 0 && (value < 2 || value > 8)) {
+      throw ArgumentError.value(value, 'value', '列数必须为自动或 2～8');
+    }
+    await init();
+    await _prefs!.setInt('tv_poster_columns', value);
+    notifyListeners();
+  }
+
   static const String _keyHistory = 'tv_watch_history';
   static const String _keyFavorites = 'tv_favorites';
   static const String _keyAutoSwitch = 'tv_auto_switch_source';

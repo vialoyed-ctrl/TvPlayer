@@ -7,6 +7,7 @@ import '../models/history_item.dart';
 import '../tv_ui/tv_theme.dart';
 import '../tv_ui/tv_focus_widget.dart';
 import '../tv_ui/ui_adaptive.dart';
+import '../tv_ui/poster_grid.dart';
 import 'detail_view.dart';
 
 class HistoryView extends StatelessWidget {
@@ -184,19 +185,13 @@ class _HistoryContent extends StatelessWidget {
 
     return GridView.builder(
       // 电视档 4 列，数字与改动前一致；手机档按最大单元宽度切列。
-      gridDelegate: UiAdaptive.isPhone
-          ? const SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: 130,
-              mainAxisSpacing: 12,
-              crossAxisSpacing: 10,
-              childAspectRatio: 0.72,
-            )
-          : const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 4,
-              mainAxisSpacing: 20,
-              crossAxisSpacing: 18,
-              childAspectRatio: 0.72,
-            ),
+      gridDelegate: PosterGrid.delegate(
+        context,
+        tvColumns: 4,
+        aspectRatio: 0.72,
+        tvMainSpacing: 20,
+        tvCrossSpacing: 18,
+      ),
       itemCount: provider.histories.length,
       itemBuilder: (context, idx) {
         final item = provider.histories[idx];
@@ -289,19 +284,13 @@ class _HistoryContent extends StatelessWidget {
     }
 
     return GridView.builder(
-      gridDelegate: UiAdaptive.isPhone
-          ? const SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: 130,
-              mainAxisSpacing: 12,
-              crossAxisSpacing: 10,
-              childAspectRatio: 0.72,
-            )
-          : const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 4,
-              mainAxisSpacing: 20,
-              crossAxisSpacing: 18,
-              childAspectRatio: 0.72,
-            ),
+      gridDelegate: PosterGrid.delegate(
+        context,
+        tvColumns: 4,
+        aspectRatio: 0.72,
+        tvMainSpacing: 20,
+        tvCrossSpacing: 18,
+      ),
       itemCount: provider.favorites.length,
       itemBuilder: (context, idx) {
         final item = provider.favorites[idx];

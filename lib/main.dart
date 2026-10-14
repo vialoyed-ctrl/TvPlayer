@@ -79,6 +79,9 @@ class _TvPlayerAppState extends State<TvPlayerApp> {
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
+        ChangeNotifierProvider<StorageService>.value(
+          value: StorageService.instance,
+        ),
         ChangeNotifierProvider(create: (_) => HomeProvider()),
         ChangeNotifierProvider(create: (_) => HistoryProvider()),
         // 下载引擎是全局单例（下载要在页面之间持续跑），所以用 .value 挂上去，
